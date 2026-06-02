@@ -19,7 +19,7 @@ defmodule BbPolicyFirmware.Robot do
 
     command :disarm do
       handler(BB.Command.Disarm)
-      allowed_states([:idle, :executing])
+      allowed_states([:idle])
     end
   end
 

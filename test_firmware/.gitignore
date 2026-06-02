@@ -6,3 +6,8 @@
 /.nerves/
 *.fw
 *.img
+
+# Nerves convenience symlinks created in the project root during builds
+/bb_policy_firmware
+/nerves
+/ortex

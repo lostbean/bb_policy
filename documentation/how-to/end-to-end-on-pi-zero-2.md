@@ -37,6 +37,58 @@ dissolves:
   cross toolchain (`CC`, `AR`, `NERVES_SDK_SYSROOT`). Ortex is a stock Rustler
   crate, so this "just works" in principle.
 
+## Build progress so far (2026-06-02)
+
+A real cross-build was attempted on an aarch64 macOS host. Findings:
+
+- **Firmware without ortex: builds cleanly** (`mix firmware` → 68 MB `.fw`). The
+  Nerves toolchain, system, robot DSL, and the rest of the app are all fine on
+  `rpi0_2`. Several host build tools had to be added to the flake along the way:
+  `pkg-config` (vintage_net_wifi), `squashfsTools` (image), `coreutils-prefixed`
+  (`gstat`), `rustup` + `fwup`. Also added: `rel/vm.args.eex` + `rel/env.sh.eex`
+  (a hand-built Nerves app lacks the generated release files), and the robot's
+  `:disarm` command must use `allowed_states([:idle])` (`:executing` isn't a
+  state of this robot).
+- **Firmware WITH ortex: blocked at the Rust cross-compile.** Two layers of
+  toolchain wiring were solved, then a third blocked it:
+  1. Ortex compiles its crate via `Rustler.Compiler.compile_crate/3` and takes
+     the cargo target from app config — **fixed** by
+     `config :ortex, Ortex.Native, target: "aarch64-unknown-linux-gnu"` in
+     `config/rpi0_2.exs` (committed). Without it cargo built for the host.
+  2. The cross-std must come from the same toolchain as `cargo` — **fixed** by
+     using `rustup` alone (not the nixpkgs `rustc`/`cargo`, which lacked the
+     `aarch64-unknown-linux-gnu` `rustlib`). After `nix develop`:
+     `rustup default stable && rustup target add aarch64-unknown-linux-gnu`.
+  3. **Blocker:** `ort`'s default `download-binaries` feature pulls in `ring`
+     (TLS for the HTTPS fetch). `ring`'s `cc`-crate build script injects
+     Apple-host flags (`-arch arm64`, `-gfull`) and hands them to the Nerves
+     Linux GCC, which rejects them. Target-specific `CC_*`/`CFLAGS_*` env vars
+     did not override Nerves' generic `CFLAGS`. This is the known macOS-host →
+     linux-gnu `cc`-crate conflict, made worse by Nerves exporting its own
+     `CFLAGS`.
+
+### Getting past the `ring` blocker — two paths (both remove `ring`)
+
+`ring` is only present because ort downloads onnxruntime over HTTPS at build
+time. Remove the download and `ring` disappears with it:
+
+- **Path 1 — vendor the static lib (recommended).** Pre-download
+  `ortrs-msort_static-v1.19.0-aarch64-unknown-linux-gnu.tgz`, and build ort with
+  `default-features = false` + `ORT_LIB_LOCATION=/path/to/onnxruntime/lib`
+  (system/static linking, no download → no `ring`). The friction: ortex pins
+  ort with default features in its own `Cargo.toml`, so this needs a
+  `[patch]`/fork of ortex (or a vendored copy with the Cargo feature flipped).
+- **Path 2 — build the cross-compile in a Linux environment.** Use `cross` (its
+  Docker images bundle a proper `aarch64-unknown-linux-gnu` GCC), or build the
+  whole firmware in a Linux container, so the `cc` crate never sees an Apple
+  host. Avoids the macOS-specific flag injection entirely. Heavier setup, but
+  it's the path with the most prior art for `ring`-on-cross.
+
+The simplest *first green* remains **Option D** (plain Raspberry Pi OS 64-bit +
+native build on the Pi): no cross-compile, no `cc`-crate host confusion — ortex
+builds natively. Use it to prove the inference + loop + latency story on this
+exact A53, then return to Nerves cross-compile as a packaging concern.
+
 ## The two real unknowns (validate these first)
 
 1. **Does the `rpi0_2` rootfs ship `libstdc++.so`?** onnxruntime is C++; even

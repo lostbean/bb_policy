@@ -50,14 +50,28 @@
             # when ORTEX=1 pulls ortex into the build; ort's download-binaries
             # feature fetches a prebuilt onnxruntime at build time (needs network).
             #
-            # rustup (not bare rustc) is needed for the Nerves cross-build of the
-            # Ortex NIF: it provides `rustup target add aarch64-unknown-linux-gnu`,
-            # which Nerves' Rustler integration uses via RUSTLER_TARGET. fwup burns
-            # the firmware image. See documentation/how-to/end-to-end-on-pi-zero-2.md.
-            rustc
-            cargo
+            # Use rustup ALONE (not the nixpkgs rustc/cargo): the Nerves
+            # cross-build needs the `aarch64-unknown-linux-gnu` std library, which
+            # is installed per-toolchain via `rustup target add`. Mixing the
+            # nixpkgs cargo (on PATH) with a rustup-installed target fails with
+            # "can't find crate for core" because they don't share rustlib. So we
+            # let rustup own both cargo and the cross-std. After `nix develop`:
+            #   rustup default stable
+            #   rustup target add aarch64-unknown-linux-gnu
+            # fwup burns the firmware image.
             rustup
             fwup
+
+            # Host build tools for Nerves C/Rust NIFs. pkg-config is needed by
+            # vintage_net_wifi (and friends) to locate libnl in the Nerves
+            # sysroot during the cross-build. squashfsTools (mksquashfs) builds
+            # the firmware rootfs image; fwup assembles/burns it.
+            pkg-config
+            squashfsTools
+
+            # Nerves on macOS shells out to GNU coreutils under g-prefixed names
+            # (gstat, gfind, gmktemp, …). coreutils-prefixed provides them.
+            coreutils-prefixed
           ];
 
           # Ortex/ort look these up when linking the NIF.

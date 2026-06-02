@@ -4,6 +4,14 @@
 
 import Config
 
+# Cross-compile the Ortex NIF for the Pi Zero 2 W (aarch64 / glibc). Ortex
+# compiles its Rust crate via `Rustler.Compiler.compile_crate/3` using the
+# target from this app-env key; without it, cargo builds for the host
+# (aarch64-apple-darwin) and feeds macOS flags (-arch, -gfull) to the Nerves
+# Linux GCC, which fails. The triple must match the Nerves toolchain
+# (aarch64-nerves-linux-gnu → Rust aarch64-unknown-linux-gnu).
+config :ortex, Ortex.Native, target: "aarch64-unknown-linux-gnu"
+
 # Use Ringlogger as the logger backend and remove :console.
 # See https://hexdocs.pm/ring_logger/readme.html for more information on
 # configuring ring_logger.
