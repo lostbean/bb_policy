@@ -24,8 +24,8 @@ robot down with it.
 
 🚧 **Early scaffold.** The `BB.Policy` behaviour and project conventions are in
 place; implementations are landing in phases. See
-[`PROJECT_PLAN.md`](PROJECT_PLAN.md) for the roadmap and the design decisions
-behind it.
+[`PROJECT_PLAN.md`](https://github.com/lostbean/bb_policy/blob/main/PROJECT_PLAN.md)
+for the roadmap and the design decisions behind it.
 
 ## Installation
 
@@ -69,10 +69,12 @@ end
 ## Documentation
 
 Generated docs live at <https://hexdocs.pm/bb_policy>. Architecture, decisions,
-and the phased roadmap are in [`PROJECT_PLAN.md`](PROJECT_PLAN.md); contributor
-conventions are in [`AGENTS.md`](AGENTS.md).
+and the phased roadmap are in
+[`PROJECT_PLAN.md`](https://github.com/lostbean/bb_policy/blob/main/PROJECT_PLAN.md);
+contributor conventions are in
+[`AGENTS.md`](https://github.com/lostbean/bb_policy/blob/main/AGENTS.md).
 
 ## Licence
 
-Apache-2.0. See [`LICENSES/`](LICENSES/) and the SPDX headers on each file
-([REUSE](https://reuse.software/)-compliant).
+Apache-2.0. See [`LICENSES/`](https://github.com/lostbean/bb_policy/tree/main/LICENSES)
+and the SPDX headers on each file ([REUSE](https://reuse.software/)-compliant).

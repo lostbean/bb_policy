@@ -47,8 +47,9 @@ defmodule BB.Policy.Runner do
 
   > #### Public API note {: .info}
   >
-  > The proposal also describes `BB.Motion.run_policy/4`. `BB.Motion` lives in
-  > the `bb` core package and has no extension hook for satellites, so that
+  > The proposal also describes a `run_policy/4` convenience function on `BB.Motion`.
+  > `BB.Motion` lives in the `bb` core package and has no extension hook for
+  > satellites, so that
   > convenience delegate must land via a PR to core. Until then, call
   > `BB.Policy.Runner.run/4` (or the `BB.Policy.run/4` facade) directly.
 

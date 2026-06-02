@@ -32,8 +32,9 @@ defmodule BB.Policy.Normalizer do
   ## Statistics
 
   Per-key stats are a map carrying a `:strategy` plus the moments that strategy
-  needs. Moment values may be numbers or `Nx.Tensor.t/0` (for per-element stats,
-  e.g. per-joint or per-channel) and are broadcast against the input tensor.
+  needs. Moment values may be numbers or `t:Nx.Tensor.t/0` (for per-element
+  stats, e.g. per-joint or per-channel) and are broadcast against the input
+  tensor.
 
       %{
         observation: %{
