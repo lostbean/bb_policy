@@ -29,4 +29,7 @@ bb_policy-*.tar
 # ONNX model fixtures are large; keep them out of git unless explicitly added.
 *.onnx
 
+# direnv / nix dev shell (flake.lock IS committed for reproducibility).
+.direnv/
+
 .claude

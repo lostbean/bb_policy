@@ -37,6 +37,26 @@ pipx run reuse lint       # licence/SPDX compliance
 Develop against a local checkout of core with `BB_VERSION=local` (expects `../bb`),
 or the main branch with `BB_VERSION=main`.
 
+### Nix dev environment
+
+A Nix flake provides a reproducible local toolchain (Erlang 28 / Elixir 1.19,
+pinned to match `.tool-versions`, which stays authoritative for CI).
+
+- **Dev shell** — `nix develop`, or let direnv load it on `cd` (`direnv allow`
+  once). The shell includes `elixir`, `erlang`, `lefthook`, and `reuse`.
+- **Formatting** — `nix fmt` runs treefmt across the repo: `mix format` for
+  Elixir (via `.formatter.exs`) and `nixfmt` for the flake. `mix format` and
+  `mix check` remain the project-level entry points.
+- **Commit gate** — a lefthook `pre-commit` hook formats staged files via
+  `nix fmt` and re-stages them. Install with `lefthook install`. This formats
+  but does **not** run `credo`/`dialyzer`/`reuse` — run `mix check` for the full
+  gate (matching CI).
+- New non-Elixir files (`.nix`, `.yml`) still carry SPDX headers so `reuse lint`
+  stays green; `flake.lock` is committed.
+
+> Commit messages: do **not** add trailers, attribution, `Co-Authored-By`, or
+> `Generated with` footers.
+
 ## Architecture
 
 ```
@@ -74,10 +94,10 @@ check `→` apply via `BB.Actuator`.
 - **Inference:** call `Ortex.run/2` directly for the single-robot hot loop. Do
   **not** reach for `Nx.Serving` batched execution — a 20 Hz loop never fills a
   batch and `batch_timeout` only adds latency.
-- **Licensing:** every file carries an SPDX header (`# SPDX-FileCopyrightText`
-  / `SPDX-License-Identifier: Apache-2.0`); `.md` uses an HTML-comment header.
-  Files that can't carry comments get a `<file>.license` sidecar. `mix check`
-  runs `reuse lint`.
+- **Licensing:** every file carries an SPDX header (a copyright line and an
+  Apache-2.0 licence identifier); `.md` uses an HTML-comment header. Files that
+  can't carry comments get a `<file>.license` sidecar. `mix check` runs
+  `reuse lint`.
 
 ## Scope (from the proposal)
 
