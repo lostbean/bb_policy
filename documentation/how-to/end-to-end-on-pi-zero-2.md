@@ -37,6 +37,52 @@ dissolves:
   cross toolchain (`CC`, `AR`, `NERVES_SDK_SYSROOT`). Ortex is a stock Rustler
   crate, so this "just works" in principle.
 
+## Proven path: build natively on an aarch64 Linux host ✅
+
+The macOS cross-build blocker below is *entirely* a consequence of building on an
+Apple host (the `cc` crate injects `-arch arm64`/`-gfull`). Building on a real
+**aarch64 Linux** machine makes the Ortex/`ring` compile **native**, so that
+problem disappears. The chosen host is `server-haus.local` (NixOS, aarch64,
+glibc 2.40) — same CPU family as the Pi.
+
+> **Confirmed 2026-06-02:** `MIX_TARGET=rpi0_2 ORTEX=1 mix firmware` built
+> successfully on `server-haus.local`. Ortex's `ring`/onnxruntime compiled
+> cleanly (no `-arch` error), producing
+> `deps/ortex/.../aarch64-unknown-linux-gnu/release/libortex.so` →
+> `deps/ortex/priv/native/ortex.so`, and a **74.8 MB** `bb_policy_firmware.fw`
+> (≈7 MB larger than the no-ortex build — the statically-linked onnxruntime).
+> Still pending: flashing it and running `BbPolicyFirmware.Bench.run/0` on the
+> actual Pi (NIF load + inference + loop + latency).
+
+Flow: `rsync` the project up (minus `_build`/`deps`), build the firmware there in
+`nix develop`, `rsync` the `.fw` back, and flash from the Mac (which has the SD
+reader at `/dev/disk5`).
+
+```bash
+# from the Mac, repo root:
+rsync -az --delete --exclude _build/ --exclude deps/ --exclude '/.git/' \
+  --exclude '*.fw' bb_policy/ server-haus.local:~/code/bb_policy/
+
+# on the server, in the dev shell:
+ssh server-haus.local
+cd ~/code/bb_policy && nix develop
+  rustup default stable                       # native target = aarch64-unknown-linux-gnu
+  mix archive.install hex nerves_bootstrap     # one-time
+  cd test_firmware
+  export MIX_TARGET=rpi0_2 ORTEX=1
+  mix deps.get && mix firmware                  # native Ortex build — no -arch bug
+
+# back on the Mac: pull the image and flash
+rsync -az server-haus.local:~/code/bb_policy/test_firmware/_build/rpi0_2_dev/nerves/images/bb_policy_firmware.fw /tmp/
+sudo fwup -a -i /tmp/bb_policy_firmware.fw -d /dev/disk5 -t complete
+```
+
+Open question still to validate even on a native Linux host: the Nerves build
+links against its **own Buildroot sysroot**, not the host's glibc 2.40 — so the
+resulting NIF should be ABI-correct for the device. The rootfs *does* ship
+`libstdc++.so.6.0.32` (confirmed in the staging sysroot), so the C++ runtime the
+NIF needs is present; optionally add `-static-libstdc++` for extra safety.
+
 ## Build progress so far (2026-06-02)
 
 A real cross-build was attempted on an aarch64 macOS host. Findings:
