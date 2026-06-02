@@ -49,8 +49,15 @@
             # Rust toolchain for building the Ortex NIF (ort 2.0-rc). Only used
             # when ORTEX=1 pulls ortex into the build; ort's download-binaries
             # feature fetches a prebuilt onnxruntime at build time (needs network).
+            #
+            # rustup (not bare rustc) is needed for the Nerves cross-build of the
+            # Ortex NIF: it provides `rustup target add aarch64-unknown-linux-gnu`,
+            # which Nerves' Rustler integration uses via RUSTLER_TARGET. fwup burns
+            # the firmware image. See documentation/how-to/end-to-end-on-pi-zero-2.md.
             rustc
             cargo
+            rustup
+            fwup
           ];
 
           # Ortex/ort look these up when linking the NIF.

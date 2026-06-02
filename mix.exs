@@ -34,6 +34,9 @@ defmodule BB.Policy.MixProject do
     [
       maintainers: ["Edgar Gomes de Araujo <talktoedgar@gmail.com>"],
       licenses: ["Apache-2.0"],
+      # Explicit allowlist so the dev-only Nerves harness in test_firmware/ (and
+      # other non-library files) never ships in the published tarball.
+      files: ~w(lib documentation .formatter.exs mix.exs README.md CHANGELOG.md LICENSES),
       links: %{
         "Source" => "https://github.com/lostbean/bb_policy"
       }

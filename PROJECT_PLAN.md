@@ -215,10 +215,36 @@ Each phase is a vertical slice that leaves the tree green (`mix check`).
   Not yet done (deferred): an end-to-end test of the controller inside a live
   supervised robot via the DSL (the callbacks are tested directly).
 
-### Phase 6 — Nerves / aarch64 deployment (R1)
+### Phase 6 — Nerves / aarch64 deployment (R1) 🟡 harness built, on-device pending
 
-- Cross-compiled Ortex NIF + aarch64 `libonnxruntime`; documented deploy path;
-  on-target latency/jitter (p99) measurements; thread-pool tuning (R3).
+Target chosen: **Raspberry Pi Zero 2 W** (aarch64 / glibc / OTP 28, Nerves
+system `rpi0_2`). Research dissolved most of R1's crux: `ort` is cross-target
+aware and pyke ships a **static** `aarch64-unknown-linux-gnu` `libonnxruntime.a`,
+so onnxruntime links *into* the NIF — no separate `.so` to ship.
+
+Built and **verified on the host** (so only the ARM cross-build is unproven):
+
+- `test_firmware/` — a self-contained Nerves app (excluded from the hex tarball
+  via an explicit `package files:` allowlist) depending on `bb_policy` by path.
+  A minimal 3-joint robot run in `simulation: :kinematic` (so `BB.Sim.Actuator`
+  closes the policy→actuator loop with no hardware), plus
+  `BbPolicyFirmware.Bench` running the three E2E checks: real ONNX inference
+  (exact `[4.5, 6.5]`), the full `BB.Policy.run/4` loop, and inference
+  latency p50/p99 vs the 20 Hz budget.
+- On the host with `ORTEX=1`: inference PASS, loop PASS, latency p50≈16 µs /
+  p99≈86 µs. The robot DSL, sim-actuator loop, and bench logic are all proven.
+- `flake.nix` gained `rustup` (for `rustup target add aarch64-unknown-linux-gnu`)
+  and `fwup`. Full runbook in
+  `documentation/how-to/end-to-end-on-pi-zero-2.md`.
+
+Pending (needs the device + a build host with rustup/fwup):
+
+- `mix firmware` cross-compile of the Ortex NIF for `rpi0_2` — the make-or-break
+  step. Two unknowns to validate on first boot: (1) the rootfs ships
+  `libstdc++.so` (the NIF needs it); (2) the C++ static archive links through
+  the Nerves toolchain. Escape hatch documented (vendor the static lib; or plain
+  Raspberry Pi OS native build).
+- On-target latency/jitter (p99) for a *real* ACT model; thread-pool tuning (R3).
 - Core PR for `BB.Motion.run_policy/4` (D1).
 
 ## 5. Acceptance-criteria → phase map

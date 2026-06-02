@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 Edgar Gomes de Araujo <talktoedgar@gmail.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import Config
+
+# Use Ringlogger as the logger backend and remove :console.
+# See https://hexdocs.pm/ring_logger/readme.html for more information on
+# configuring ring_logger.
+
+config :logger, backends: [RingLogger]
+
+# Authorize the device to receive firmware using your public key.
+# See https://hexdocs.pm/nerves_ssh/readme.html for more information
+# on configuring nerves_ssh.
+
+keys =
+  [
+    Path.join([System.user_home!(), ".ssh", "id_rsa.pub"]),
+    Path.join([System.user_home!(), ".ssh", "id_ecdsa.pub"]),
+    Path.join([System.user_home!(), ".ssh", "id_ed25519.pub"])
+  ]
+  |> Enum.filter(&File.exists?/1)
+
+if keys == [],
+  do:
+    Mix.raise("""
+    No SSH public keys found in ~/.ssh. An ssh authorized key is needed to
+    log into the Nerves device and update firmware on it using ssh.
+    See your project's config.exs for this error message.
+    """)
+
+config :nerves_ssh,
+  authorized_keys: Enum.map(keys, &File.read!/1)
+
+# Configure the network using vintage_net
+config :vintage_net,
+  regulatory_domain: "00",
+  config: [
+    {"usb0", %{type: VintageNetDirect}},
+    {"eth0",
+     %{
+       type: VintageNetEthernet,
+       ipv4: %{method: :dhcp}
+     }},
+    {"wlan0", %{type: VintageNetWiFi}}
+  ]
+
+config :mdns_lite,
+  host: [:hostname, "bb_policy_firmware"],
+  ttl: 120,
+  services: [
+    %{protocol: "ssh", transport: "tcp", port: 22},
+    %{protocol: "sftp-ssh", transport: "tcp", port: 22},
+    %{protocol: "epmd", transport: "tcp", port: 4369}
+  ]

@@ -30,6 +30,7 @@ bb_policy-*.tar
 # test fixture is the deliberate exception (see test/fixtures/generate_linear.py).
 *.onnx
 !test/fixtures/*.onnx
+!test_firmware/priv/models/*.onnx
 
 # direnv / nix dev shell (flake.lock IS committed for reproducibility).
 .direnv/
