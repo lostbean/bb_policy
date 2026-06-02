@@ -24,20 +24,27 @@ defmodule BbPolicyFirmware.Bench do
   require Logger
 
   @robot BbPolicyFirmware.Robot
-  @model Application.app_dir(:bb_policy_firmware, "priv/models/linear_policy.onnx")
+  @expected [4.5, 6.5]
+
+  # Resolve the model path at RUNTIME — Application.app_dir/2 returns the install
+  # path on whatever node we're on (the device's /srv/erlang/..., not the build
+  # host's). A module attribute would freeze the build host's path into the beam.
+  defp model_path,
+    do: Application.app_dir(:bb_policy_firmware, "priv/models/linear_policy.onnx")
 
   # Same fixture as the dev-box test: action = obs @ W + b, so [1,2,3] -> [4.5, 6.5].
-  @policy_opts [
-    model: @model,
-    observation: [positions: [:a, :b, :c]],
-    action: [{[:a, :b, :c], :position}]
-  ]
-  @expected [4.5, 6.5]
+  defp policy_opts do
+    [
+      model: model_path(),
+      observation: [positions: [:a, :b, :c]],
+      action: [{[:a, :b, :c], :position}]
+    ]
+  end
 
   @doc "Run all three checks and print a summary."
   def run do
     IO.puts("\n=== bb_policy on-device end-to-end ===")
-    IO.puts("model: #{@model}")
+    IO.puts("model: #{model_path()}")
     inference = check_inference()
     loop = check_loop()
     latency = check_latency(200, 20)
@@ -58,7 +65,7 @@ defmodule BbPolicyFirmware.Bench do
   exact trained mapping, not the robot.
   """
   def check_inference do
-    with {:ok, state} <- ONNX.init(@policy_opts) do
+    with {:ok, state} <- ONNX.init(policy_opts()) do
       obs = %{input: Nx.tensor([1.0, 2.0, 3.0], type: :f32)}
       {%{action: action}, _state} = ONNX.act(obs, state)
       got = action |> Nx.backend_transfer() |> Nx.to_flat_list()
@@ -79,7 +86,7 @@ defmodule BbPolicyFirmware.Bench do
 
     result =
       BB.Policy.run(@robot, ONNX, %{task: :bench},
-        policy_opts: @policy_opts,
+        policy_opts: policy_opts(),
         rate_hz: 20,
         timeout: 1_000
       )
@@ -97,7 +104,7 @@ defmodule BbPolicyFirmware.Bench do
 
   @doc "Check 3: inference latency distribution at a target rate."
   def check_latency(samples, rate_hz) do
-    {:ok, state} = ONNX.init(@policy_opts)
+    {:ok, state} = ONNX.init(policy_opts())
     obs = %{input: Nx.tensor([0.1, 0.2, 0.3], type: :f32)}
 
     times =
@@ -126,14 +133,16 @@ defmodule BbPolicyFirmware.Bench do
   # --- helpers -------------------------------------------------------------
 
   defp ensure_armed do
-    case BB.Safety.armed?(@robot) do
-      true ->
-        :ok
-
-      false ->
-        {:ok, cmd} = @robot.arm(%{})
-        {:ok, _} = BB.Command.await(cmd, 5_000)
-        :ok
+    if BB.Safety.armed?(@robot) do
+      :ok
+    else
+      {:ok, cmd} = @robot.arm(%{})
+      # arm completes as {:ok, :armed} or {:ok, :armed, [next_state: :idle]}.
+      case BB.Command.await(cmd, 5_000) do
+        {:ok, :armed} -> :ok
+        {:ok, :armed, _opts} -> :ok
+        other -> {:error, {:arm_failed, other}}
+      end
     end
   end
 

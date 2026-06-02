@@ -284,3 +284,27 @@ the p99 number actually matters (R3 — measure worst case, not mean).
   `bb_policy` and depend on it via `path:`.
 - Optionally add a `documentation/how-to/` entry (this file) and a make/mix
   alias to drive the build.
+
+## ✅ On-device result (2026-06-02)
+
+Verified on a real Raspberry Pi Zero 2 W (Nerves `rpi0_2`), firmware built
+natively on `server-haus.local` and delivered via `mix upload` / `upload.sh`:
+
+- **NIF loads on ARM:** `Ortex.Model` reference live; the aarch64 NIF with
+  statically-embedded onnxruntime loads against the Nerves rootfs (glibc +
+  libstdc++ 6.0.32) — no ABI issue.
+- **Inference correct:** `observe [1,2,3] → act → [4.5, 6.5]` (exact).
+- **Latency on the A53** (200 runs of `act/2`, single linear model):
+  **p50 = 291 µs, p99 = 932 µs, max = 1184 µs** — vs the 50 ms / 20 Hz budget,
+  i.e. p99 is ~54× under budget. Ample headroom for a real ACT model.
+
+Believed to be the first working Ortex-on-Nerves deployment.
+
+### Notes / loose ends
+- Ortex 0.1.10 has an `Inspect` bug for `%Ortex.Model{}` (pretty-printing the
+  struct raises `Inspect.Algebra` `FunctionClauseError`). Cosmetic only —
+  inference is unaffected. Worth an upstream issue.
+- A/B validation: a freshly-flashed firmware must be validated
+  (`Nerves.Runtime.validate_firmware/0`, or startup-guard auto-validation) or
+  the next `mix upload` reverts on reboot. This bit us — the bench-fixed build
+  uploaded but reverted to the prior (validated) partition.
