@@ -1,0 +1,99 @@
+<!--
+SPDX-FileCopyrightText: 2026 Edgar Gomes de Araujo <talktoedgar@gmail.com>
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
+# AGENTS.md
+
+Guidance for coding assistants working in `bb_policy`.
+
+## Project Overview
+
+`bb_policy` is a satellite package of [Beam Bots](https://github.com/beam-bots/bb).
+It runs **learned policies** — neural networks (typically exported to ONNX) that
+map observations to actions — on real robots, inside the BEAM, with full safety
+integration. It is *not* a training framework, dataset manager, or vision
+pipeline; those are separate packages (see "Scope" below and `PROJECT_PLAN.md`).
+
+The authoritative design is the accepted proposal
+[`0002-bb-policy.md`](https://github.com/beam-bots/proposals/blob/main/accepted/0002-bb-policy.md).
+The phased roadmap and the decisions that diverge from the proposal are in
+[`PROJECT_PLAN.md`](PROJECT_PLAN.md) — read it before making architectural changes.
+
+## Common Commands
+
+```bash
+mix deps.get
+mix check --no-retry      # formatter, credo --strict, dialyzer, reuse lint, tests
+mix test
+mix test test/bb/policy_test.exs:42
+mix format
+mix credo --strict
+mix dialyzer
+pipx run reuse lint       # licence/SPDX compliance
+```
+
+Develop against a local checkout of core with `BB_VERSION=local` (expects `../bb`),
+or the main branch with `BB_VERSION=main`.
+
+## Architecture
+
+```
+BB.Policy            # the behaviour: init/1 reset/1 observe/3 act/2 action_to_commands/3
+   ├─ BB.Policy.Runner      # GenServer control loop; BB.Policy.run/4 entry point
+   ├─ BB.Policy.Normalizer  # min-max / z-score / identity scaling (pure Nx)
+   ├─ BB.Policy.ONNX        # @behaviour BB.Policy, loads models via Ortex
+   └─ BB.Policy.Telemetry   # [:bb, :policy, …] event contract
+```
+
+The runner cycle, each tick: `observe/3 → act/2 → action_to_commands/3 →` safety
+check `→` apply via `BB.Actuator`.
+
+## Key Patterns (match the ecosystem)
+
+- **Namespace:** all modules under `BB.Policy.*`. App is `:bb_policy`; the
+  MixProject module is `BB.Policy.MixProject`.
+- **Control loop:** schedule ticks with `Process.send_after(self(), :tick, ms)`
+  and reschedule from the `handle_info(:tick, …)` body. This mirrors
+  `BB.PID.Controller`. Do **not** use `:timer.send_interval` (no backpressure).
+- **Safety is not optional.** Check `BB.Safety.armed?/1` before applying any
+  command in the loop. A mid-episode disarm halts the episode — it is a safety
+  intervention, not a retryable error. Never construct a code path that drives
+  actuators while disarmed.
+- **Reading robot state:** `BB.Robot.Runtime.get_robot_state/1` then the
+  `BB.Robot.State` accessors; or subscribe via `BB.PubSub.subscribe/2,3` and
+  cache the latest payloads.
+- **Commands out:** build `BB.Actuator.command()` values; apply with
+  `BB.Actuator` (`set_position/4`, `set_velocity/3`, …).
+- **Errors:** prefer structured `BB.Error` types over ad-hoc tuples where they
+  fit; all `BB.Error` types must implement `BB.Error.Severity`.
+- **Telemetry:** emit through `BB.Telemetry`, event names `[:bb, :policy, …]`.
+- **Ortex is an optional dependency.** `BB.Policy.ONNX` must degrade gracefully
+  (clear error) when `ortex` is absent — guard with `Code.ensure_loaded?/1`.
+- **Inference:** call `Ortex.run/2` directly for the single-robot hot loop. Do
+  **not** reach for `Nx.Serving` batched execution — a 20 Hz loop never fills a
+  batch and `batch_timeout` only adds latency.
+- **Licensing:** every file carries an SPDX header (`# SPDX-FileCopyrightText`
+  / `SPDX-License-Identifier: Apache-2.0`); `.md` uses an HTML-comment header.
+  Files that can't carry comments get a `<file>.license` sidecar. `mix check`
+  runs `reuse lint`.
+
+## Scope (from the proposal)
+
+**This package:** the policy behaviour, runner, normaliser, ONNX implementation,
+reactor command wrapper, safety integration, telemetry.
+
+**Not this package** (separate `bb_*` packages): native Axon policies, diffusion
+policies, training loops, dataset management, vision encoders, a Python bridge.
+
+## Testing
+
+- `MockPolicy` (`test/support/mock_policy.ex`) is a dependency-free `BB.Policy`
+  for exercising the runner and the behaviour contract without Ortex.
+- `mimic` is available for mocking; `ortex`-dependent tests must be tagged and
+  skippable so CI passes without a compiled onnxruntime.
+
+## Proposals
+
+Feature proposals live in <https://github.com/beam-bots/proposals>.

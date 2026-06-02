@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Edgar Gomes de Araujo <talktoedgar@gmail.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# The directory Mix will write compiled artifacts to.
+/_build/
+
+# If you run "mix test --cover", coverage assets end up here.
+/cover/
+
+# The directory Mix downloads your dependencies sources to.
+/deps/
+
+# Where third-party dependencies like ExDoc output generated docs.
+/doc/
+
+# If the VM crashes, it generates a dump, let's ignore it too.
+erl_crash.dump
+
+# Also ignore archive artifacts (built via "mix archive.build").
+*.ez
+
+# Ignore package tarball (built via "mix hex.build").
+bb_policy-*.tar
+
+# Temporary files, for example, from tests.
+/tmp/
+
+# ONNX model fixtures are large; keep them out of git unless explicitly added.
+*.onnx
+
+.claude
