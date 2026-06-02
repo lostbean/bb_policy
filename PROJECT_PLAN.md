@@ -215,36 +215,42 @@ Each phase is a vertical slice that leaves the tree green (`mix check`).
   Not yet done (deferred): an end-to-end test of the controller inside a live
   supervised robot via the DSL (the callbacks are tested directly).
 
-### Phase 6 — Nerves / aarch64 deployment (R1) 🟡 harness built, on-device pending
+### Phase 6 — Nerves / aarch64 deployment (R1) ✅ proven on hardware
 
-Target chosen: **Raspberry Pi Zero 2 W** (aarch64 / glibc / OTP 28, Nerves
-system `rpi0_2`). Research dissolved most of R1's crux: `ort` is cross-target
-aware and pyke ships a **static** `aarch64-unknown-linux-gnu` `libonnxruntime.a`,
-so onnxruntime links *into* the NIF — no separate `.so` to ship.
-
-Built and **verified on the host** (so only the ARM cross-build is unproven):
+Target: **Raspberry Pi Zero 2 W** (aarch64 / glibc / OTP 28, Nerves system
+`rpi0_2`). R1's crux dissolved: `ort` is cross-target aware and pyke ships a
+**static** `aarch64-unknown-linux-gnu` `libonnxruntime.a`, so onnxruntime links
+*into* the NIF — no separate `.so` to ship.
 
 - `test_firmware/` — a self-contained Nerves app (excluded from the hex tarball
   via an explicit `package files:` allowlist) depending on `bb_policy` by path.
-  A minimal 3-joint robot run in `simulation: :kinematic` (so `BB.Sim.Actuator`
-  closes the policy→actuator loop with no hardware), plus
-  `BbPolicyFirmware.Bench` running the three E2E checks: real ONNX inference
-  (exact `[4.5, 6.5]`), the full `BB.Policy.run/4` loop, and inference
-  latency p50/p99 vs the 20 Hz budget.
-- On the host with `ORTEX=1`: inference PASS, loop PASS, latency p50≈16 µs /
-  p99≈86 µs. The robot DSL, sim-actuator loop, and bench logic are all proven.
-- `flake.nix` gained `rustup` (for `rustup target add aarch64-unknown-linux-gnu`)
-  and `fwup`. Full runbook in
+  A minimal 3-joint robot in `simulation: :kinematic` (so `BB.Sim.Actuator`
+  closes the policy→actuator loop with no hardware), plus `BbPolicyFirmware.Bench`
+  running three E2E checks: real ONNX inference, the full `BB.Policy.run/4`
+  loop, and inference latency p50/p99 vs the 20 Hz budget.
+- **The build path that works: native aarch64 Linux.** The macOS cross-build
+  fails (the `cc` crate feeds Apple `-arch`/`-gfull` flags to the Nerves GCC via
+  `ring`, ort's TLS download dep). Building on a native aarch64 Linux box
+  (`server-haus`) makes it a native compile — no Apple flags — and `mix firmware`
+  succeeds. flake gained `rustup`/`fwup`/`pkg-config`/`squashfsTools`/
+  `coreutils-prefixed`. Full runbook + the toolchain-wiring saga in
   `documentation/how-to/end-to-end-on-pi-zero-2.md`.
+- **On-device result (2026-06-02), all three checks PASS, repeatably:** the
+  aarch64 NIF (onnxruntime statically embedded) loads against the Nerves rootfs
+  (glibc + libstdc++ 6.0.32 — ABI fine); inference `[1,2,3] → [4.5, 6.5]` exact;
+  the Runner→Sim.Actuator loop runs with the safety gate; latency under load
+  p50 ≈ 0.5 ms, p99 ≈ 1.4–1.9 ms, max ≈ 2–4 ms — ~12× under the 50 ms / 20 Hz
+  budget. Believed to be the first working **Ortex-on-Nerves** deployment.
 
-Pending (needs the device + a build host with rustup/fwup):
+Still open (deferred by design):
 
-- `mix firmware` cross-compile of the Ortex NIF for `rpi0_2` — the make-or-break
-  step. Two unknowns to validate on first boot: (1) the rootfs ships
-  `libstdc++.so` (the NIF needs it); (2) the C++ static archive links through
-  the Nerves toolchain. Escape hatch documented (vendor the static lib; or plain
-  Raspberry Pi OS native build).
-- On-target latency/jitter (p99) for a *real* ACT model; thread-pool tuning (R3).
+- **Real model:** all numbers are for the 207-byte / 8-param linear *fixture* —
+  proving the pipeline and overhead floor, not that a real ACT model runs at
+  20 Hz. That needs the LeRobot→ONNX export (R2), a Python-side workstream.
+- A/B firmware validation: a freshly-flashed image must validate
+  (`Nerves.Runtime.validate_firmware/0` / startup-guard) or a later `mix upload`
+  reverts on reboot.
+- On-target thread-pool tuning + p99 for a real model (R3).
 - Core PR for `BB.Motion.run_policy/4` (D1).
 
 ## 5. Acceptance-criteria → phase map

@@ -308,3 +308,25 @@ Believed to be the first working Ortex-on-Nerves deployment.
   (`Nerves.Runtime.validate_firmware/0`, or startup-guard auto-validation) or
   the next `mix upload` reverts on reboot. This bit us — the bench-fixed build
   uploaded but reverted to the prior (validated) partition.
+
+### Final result: committed firmware, full bench green (2026-06-02)
+
+Reflashed with the bench-fixed build (`motion-garlic`) so `BbPolicyFirmware.Bench.run/0`
+runs the committed code directly (no manual paste). All three checks PASS,
+across 7 consecutive runs (200 `act/2` calls each):
+
+- **inference:** `{got: [4.5, 6.5]}` every run.
+- **loop:** `{ran: true}` — the full `BB.Policy.Runner` → `BB.Sim.Actuator`
+  cycle (arm → observe → infer → command), on-device, with the safety gate.
+- **latency** (under realistic load — the loop GenServer runs concurrently):
+  p50 ≈ 474–623 µs, p99 ≈ 1.36–1.91 ms, max ≈ 2.0–4.1 ms. vs the 50 ms / 20 Hz
+  budget, worst-case is ~12× under.
+
+Note the ~2× higher latency vs the isolated hand-run (p50 291 / p99 932 µs):
+the bench measures inference while the live control loop and full supervision
+tree are running, so this is latency *under load*. The p50→max spread (~8×) is
+the BEAM-scheduler/NIF jitter (R3) — within budget here, but it's the figure
+that matters for a heavier (real ACT) model. These numbers are for the 207-byte
+8-parameter linear *fixture*, not a real policy — they prove the pipeline and
+the overhead floor, not that ACT runs at 20 Hz (that needs a real exported
+model, R2).
