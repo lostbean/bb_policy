@@ -45,7 +45,18 @@
             erlang.erlang
             lefthook
             reuse # licence/SPDX lint (mix check runs `reuse lint`)
+
+            # Rust toolchain for building the Ortex NIF (ort 2.0-rc). Only used
+            # when ORTEX=1 pulls ortex into the build; ort's download-binaries
+            # feature fetches a prebuilt onnxruntime at build time (needs network).
+            rustc
+            cargo
           ];
+
+          # Ortex/ort look these up when linking the NIF.
+          env = {
+            RUSTLER_NIF_VERSION = "2.16";
+          };
         };
 
         # `nix fmt` runs treefmt across the repo.

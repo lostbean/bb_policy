@@ -67,6 +67,7 @@ defmodule BB.Policy.Runner do
   alias BB.Policy.ActuatorCommand
   alias BB.Policy.Telemetry
   alias BB.Process, as: BBProcess
+  alias BB.Robot.Runtime
 
   @default_rate_hz 20
   @default_timeout :timer.seconds(30)
@@ -198,7 +199,7 @@ defmodule BB.Policy.Runner do
 
   defp run_step(%__MODULE__{} = state) do
     %{policy_module: policy_module, robot: robot} = state
-    robot_state = BB.Robot.Runtime.get_robot_state(robot)
+    robot_state = Runtime.get_robot_state(robot)
     sensors = %{}
 
     started = System.monotonic_time()

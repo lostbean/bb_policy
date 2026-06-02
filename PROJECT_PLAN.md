@@ -140,14 +140,30 @@ Each phase is a vertical slice that leaves the tree green (`mix check`).
   `simulation: :kinematic` robot integration test is deferred to Phase 3, where
   a real ONNX policy gives it something meaningful to drive.
 
-### Phase 3 — ONNX on dev box (D5)
+### Phase 3 — ONNX on dev box (D5) ✅
 
-- `BB.Policy.ONNX` loads a model with `Ortex.load/2`, runs `Ortex.run/2`, wires
-  in the normaliser, builds actuator commands.
-- Action-chunking: receding-horizon queue first (infer when queue empties).
-- A small known-good ACT-class fixture model + an integration test (tagged so CI
-  without onnxruntime skips it).
-- **Done when:** a real ONNX policy drives a simulated robot on a dev box.
+- `BB.Policy.ONNX` loads a model with `Ortex.load/2`, runs `Ortex.run/2` (direct,
+  not batched — D3), wires in `BB.Policy.Normalizer`, and builds
+  `BB.Policy.ActuatorCommand`s from the output via a declarative `:observation`
+  (`source: joints`) / `:action` (`{joints, kind}`) spec.
+- Action-chunking: receding-horizon queue — `act/2` pops one row; refills by
+  inferring when the queue empties (a single-action model = infer every tick).
+- Optional-dependency hygiene: `init/1` guards with `Code.ensure_loaded?(Ortex)`;
+  the two Ortex calls use `apply/3` so the package compiles
+  `--warnings-as-errors` and passes dialyzer **without** ortex present.
+- Toolchain: `flake.nix` gained `rustc`/`cargo`; `ORTEX=1` builds the NIF and
+  `ort`'s `download-binaries` fetches an `aarch64-apple-darwin` onnxruntime.
+- Fixture: `test/fixtures/generate_linear.py` builds a tiny static-shape linear
+  ONNX (committed as `linear_policy.onnx`); the integration test is tagged
+  `:ortex` and auto-excluded when Ortex isn't loaded.
+- **Done:** real onnxruntime inference verified end-to-end (obs → normalise →
+  `Ortex.run` → denormalise → commands) with exact expected outputs. With
+  `ORTEX=1`: 44 tests + 2 doctests green. Without: 38 tests (6 excluded),
+  format / warnings-as-errors / `credo --strict` / dialyzer / `reuse lint` clean.
+
+  Not yet done (deferred): driving a live `simulation: :kinematic` robot through
+  `BB.Policy.Runner` with this policy (the runner + ONNX are each tested in
+  isolation); temporal ensembling; multi-input models (e.g. vision + state).
 
 ### Phase 4 — Reactor command wrapper (proposal "Should Have")
 

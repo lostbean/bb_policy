@@ -26,8 +26,10 @@ bb_policy-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 
-# ONNX model fixtures are large; keep them out of git unless explicitly added.
+# ONNX models are large; keep them out of git by default. The tiny generated
+# test fixture is the deliberate exception (see test/fixtures/generate_linear.py).
 *.onnx
+!test/fixtures/*.onnx
 
 # direnv / nix dev shell (flake.lock IS committed for reproducibility).
 .direnv/

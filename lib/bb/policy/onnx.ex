@@ -12,16 +12,36 @@ defmodule BB.Policy.ONNX do
 
   ## Usage
 
-      {:ok, result} =
-        BB.Policy.Runner.run(MyRobot, BB.Policy.ONNX, %{task: :pick_mug},
-          policy_opts: [
-            model: "priv/models/pick_mug.onnx",
-            normalizer: "priv/models/pick_mug.json",
-            observation_keys: [:joint_positions, :joint_velocities, :gripper],
-            action_keys: [:target_positions, :target_gripper]
-          ],
-          rate_hz: 20
-        )
+      BB.Policy.run(MyRobot, BB.Policy.ONNX, %{task: :pick_mug},
+        policy_opts: [
+          model: "priv/models/pick_mug.onnx",
+          normalizer: "priv/models/pick_mug.json",
+          observation: [positions: [:shoulder, :elbow, :wrist]],
+          action: [{[:shoulder, :elbow, :wrist], :position}]
+        ],
+        rate_hz: 20
+      )
+
+  ## Options
+
+    * `:model` (required) — path to the `.onnx` file.
+    * `:observation` (required) — an ordered keyword list describing how to build
+      the model's single input vector from robot state. Each entry is
+      `source: joints`, where `source` is `:positions` or `:velocities` and
+      `joints` is the ordered list of joint names to read. Entries are
+      concatenated in order, normalised (see `:normalizer`), and reshaped to
+      `[1, N]`.
+    * `:action` (required) — an ordered list of `{joints, kind}` mapping the
+      model's output columns to actuator commands, where `kind` is `:position`,
+      `:velocity`, or `:effort`. Columns are consumed left-to-right across the
+      entries; the joint name doubles as the actuator path (wrap in a list for a
+      nested path).
+    * `:normalizer` — a `BB.Policy.Normalizer` struct, or a path to its JSON.
+      Observations are normalised under key `:observation`, actions
+      denormalised under key `:action`. Optional (defaults to identity).
+    * `:execution_providers` — ordered Ortex execution-provider list. Default
+      `[:cpu]`. Note ort silently falls back to CPU if a provider isn't compiled
+      in (see PROJECT_PLAN R4).
 
   ## Inference: `Ortex.run/2`, not batched serving
 
@@ -46,74 +66,169 @@ defmodule BB.Policy.ONNX do
 
   ## Action chunking (ACT)
 
-  ACT predicts a horizon of future actions per inference. Two runtime regimes:
+  ACT predicts a horizon of future actions per inference. This module implements
+  the **receding-horizon queue**: each `c:BB.Policy.act/2` pops one action row;
+  when the queue empties it runs one inference and refills from the predicted
+  chunk. A model that outputs a single action (`[1, action_dim]`) is treated as
+  a chunk of length one — i.e. inference every tick. Temporal ensembling is a
+  later phase.
 
-    * **Receding-horizon queue** — execute queued actions one per tick; infer
-      only when the queue empties. Cheaper; the recommended first implementation.
-    * **Temporal ensembling** — infer every tick and blend overlapping chunks.
-      Smoother but more compute.
-
-  The chosen regime lives in this module's policy `state` (the queue/buffer);
-  `BB.Policy.Runner` ticks at a fixed rate and asks for the action of the
-  current step.
-
-  > #### Status {: .info}
+  > #### Optional dependency {: .info}
   >
-  > Stub. Implemented in the `ortex-dev-box` phase (dev/sim target first; the
-  > Nerves/aarch64 `libonnxruntime` story is a later, explicitly-scoped phase).
-  > `ortex` is an optional dependency — this module only loads if it is present.
+  > `ortex` builds a Rust NIF and downloads an onnxruntime binary, so it is an
+  > optional dependency gated behind `ORTEX=1` in this repo. `init/1` returns a
+  > clear error if Ortex is not loaded.
   """
 
   @behaviour BB.Policy
 
-  # These callbacks are stubs that always raise until the ortex-dev-box phase,
-  # so dialyzer correctly sees no local return. Suppress until implemented.
-  @dialyzer {:no_return, observe: 3, act: 2}
+  alias BB.Policy.ActuatorCommand
+  alias BB.Policy.Normalizer
+  alias BB.Robot.State, as: RobotState
 
   defstruct [
     :model,
     :normalizer,
-    :observation_keys,
-    :action_keys,
-    :action_chunk,
-    :hidden_state
+    :observation,
+    :action,
+    :action_queue
   ]
 
-  @type t :: %__MODULE__{}
+  @type source :: :positions | :velocities
+  @type observation_spec :: [{source(), [atom()]}]
+  @type action_spec :: [{atom() | [atom()], ActuatorCommand.kind()}]
+
+  @type t :: %__MODULE__{
+          model: term(),
+          normalizer: Normalizer.t(),
+          observation: observation_spec(),
+          action: action_spec(),
+          action_queue: [Nx.Tensor.t()]
+        }
 
   @impl BB.Policy
   def init(opts) do
-    _ = Keyword.fetch!(opts, :model)
-    # TODO(phase: ortex-dev-box):
-    #   model      = Ortex.load(model_path, execution_providers(opts))
-    #   normalizer = BB.Policy.Normalizer.load(opts[:normalizer])
-    #   verify ortex is loaded (Code.ensure_loaded?/1) and surface a clear
-    #   error if the optional dep is missing.
-    {:error, :not_implemented}
+    with :ok <- ensure_ortex(),
+         {:ok, model_path} <- fetch(opts, :model),
+         {:ok, observation} <- fetch(opts, :observation),
+         {:ok, action} <- fetch(opts, :action),
+         {:ok, normalizer} <- load_normalizer(opts[:normalizer]) do
+      # apply/3 rather than a direct call: ortex is an optional dependency, so
+      # the module may be absent at compile time. ensure_ortex/0 above guarantees
+      # it is loaded before we reach here.
+      providers = Keyword.get(opts, :execution_providers, [:cpu])
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      model = apply(Ortex, :load, [model_path, providers])
+
+      {:ok,
+       %__MODULE__{
+         model: model,
+         normalizer: normalizer,
+         observation: observation,
+         action: action,
+         action_queue: []
+       }}
+    end
   end
 
   @impl BB.Policy
-  def reset(%__MODULE__{} = state) do
-    %{state | hidden_state: nil, action_chunk: nil}
+  def reset(%__MODULE__{} = state), do: %{state | action_queue: []}
+
+  @impl BB.Policy
+  def observe(robot_state, _sensors, %__MODULE__{} = state) do
+    vector =
+      state.observation
+      |> Enum.flat_map(fn {source, joints} -> read_joints(robot_state, source, joints) end)
+      |> Nx.tensor(type: :f32)
+
+    normalised = Normalizer.normalize(state.normalizer, :observation, :input, vector)
+    {%{input: normalised}, state}
   end
 
   @impl BB.Policy
-  def observe(_robot_state, _sensors, %__MODULE__{} = _state) do
-    # TODO(phase: ortex-dev-box): gather observation_keys, normalise, return tensors.
-    raise "BB.Policy.ONNX.observe/3 not implemented (phase: ortex-dev-box)"
+  def act(%{input: input}, %__MODULE__{action_queue: []} = state) do
+    chunk = run_inference(state.model, input)
+    [row | rest] = rows(chunk)
+    {%{action: row}, %{state | action_queue: rest}}
+  end
+
+  def act(_observation, %__MODULE__{action_queue: [row | rest]} = state) do
+    {%{action: row}, %{state | action_queue: rest}}
   end
 
   @impl BB.Policy
-  def act(_observation, %__MODULE__{} = _state) do
-    # TODO(phase: ortex-dev-box): build input tuple, Ortex.run/2, slice the
-    # action chunk, manage the receding-horizon queue in state.
-    raise "BB.Policy.ONNX.act/2 not implemented (phase: ortex-dev-box)"
+  def action_to_commands(%{action: row}, _robot, %__MODULE__{} = state) do
+    denormalised = Normalizer.denormalize(state.normalizer, :action, :output, row)
+    values = Nx.to_flat_list(denormalised)
+
+    {commands, _rest} =
+      Enum.reduce(state.action, {[], values}, fn {joints, kind}, {acc, remaining} ->
+        joints = List.wrap(joints)
+        {taken, rest} = Enum.split(remaining, length(joints))
+
+        cmds =
+          joints
+          |> Enum.zip(taken)
+          |> Enum.map(fn {joint, value} -> build_command(kind, joint, value) end)
+
+        {acc ++ cmds, rest}
+      end)
+
+    {:ok, commands}
+  rescue
+    error -> {:error, {:action_to_commands, error}}
   end
 
-  @impl BB.Policy
-  def action_to_commands(_action, _robot, %__MODULE__{} = _state) do
-    # TODO(phase: ortex-dev-box): denormalise via BB.Policy.Normalizer and
-    # build BB.Actuator commands for the action_keys.
-    {:error, :not_implemented}
+  # --- internals -----------------------------------------------------------
+
+  defp ensure_ortex do
+    if Code.ensure_loaded?(Ortex) do
+      :ok
+    else
+      {:error, :ortex_not_available}
+    end
   end
+
+  defp fetch(opts, key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, {:missing_option, key}}
+    end
+  end
+
+  defp load_normalizer(nil), do: {:ok, %Normalizer{}}
+  defp load_normalizer(%Normalizer{} = normalizer), do: {:ok, normalizer}
+  defp load_normalizer(path) when is_binary(path), do: Normalizer.load(path)
+
+  defp read_joints(robot_state, :positions, joints) do
+    all = RobotState.get_all_positions(robot_state)
+    Enum.map(joints, &Map.get(all, &1, 0.0))
+  end
+
+  defp read_joints(robot_state, :velocities, joints) do
+    all = RobotState.get_all_velocities(robot_state)
+    Enum.map(joints, &Map.get(all, &1, 0.0))
+  end
+
+  defp run_inference(model, input) do
+    batched = Nx.reshape(input, {1, Nx.size(input)})
+    # apply/3: see the note in init/1 — Ortex is an optional dependency.
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
+    {output} = apply(Ortex, :run, [model, {batched}])
+    Nx.backend_transfer(output)
+  end
+
+  # Normalise the model output into a list of per-step action rows (1-D tensors),
+  # whether the model emits [1, action_dim] or a chunk [1, chunk, action_dim].
+  defp rows(output) do
+    case Nx.shape(output) do
+      {1, _dim} -> [output[0]]
+      {1, chunk, _dim} -> for i <- 0..(chunk - 1), do: output[0][i]
+      {_dim} -> [output]
+    end
+  end
+
+  defp build_command(:position, joint, value), do: ActuatorCommand.position(joint, value)
+  defp build_command(:velocity, joint, value), do: ActuatorCommand.velocity(joint, value)
+  defp build_command(:effort, joint, value), do: ActuatorCommand.effort(joint, value)
 end

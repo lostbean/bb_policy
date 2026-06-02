@@ -37,6 +37,13 @@ pipx run reuse lint       # licence/SPDX compliance
 Develop against a local checkout of core with `BB_VERSION=local` (expects `../bb`),
 or the main branch with `BB_VERSION=main`.
 
+`ortex` builds a Rust NIF and downloads an onnxruntime binary, so it is gated
+behind `ORTEX=1` (off by default — dev/test/CI don't need Rust). To work on
+`BB.Policy.ONNX`, run `ORTEX=1 mix deps.get && ORTEX=1 mix test` inside the dev
+shell (which provides `cargo`/`rustc`). The `:ortex`-tagged tests auto-skip when
+Ortex isn't loaded. Regenerate the test model with
+`test/fixtures/generate_linear.py` (see its header for the nix invocation).
+
 ### Nix dev environment
 
 A Nix flake provides a reproducible local toolchain (Erlang 28 / Elixir 1.19,
