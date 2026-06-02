@@ -118,14 +118,27 @@ Each phase is a vertical slice that leaves the tree green (`mix check`).
   the exported stats JSON via the stdlib `JSON` module (no extra dependency).
 - **Done:** 22 tests + 2 doctests green; `mix format` and `credo --strict` clean.
 
-### Phase 2 — Runner vertical slice (sim robot, MockPolicy)
+### Phase 2 — Runner vertical slice (MockPolicy) ✅
 
-- Implement `Runner.init/1` (policy init + reset, deadline, tick scheduling),
-  the `handle_info(:tick, …)` loop, and `run/4` (start → await → teardown).
-- Safety gate (`BB.Safety.armed?/1`); deadline/timeout; episode telemetry.
-- Read robot state via `BB.Robot.Runtime`; apply commands via `BB.Actuator`.
-- **Done when:** MockPolicy runs end-to-end against a `simulation: :kinematic`
-  robot in a test; disarm halts the episode; timeout returns cleanly.
+- `Runner.init/1` (policy init + reset, deadline, first tick), the
+  `handle_info(:tick, …)` loop, and `run/4` (start → monitor → await → teardown).
+- Safety gate (`BB.Safety.armed?/1`) checked every tick; a disarm — at start or
+  mid-episode — ends the episode with `:disarmed` (intervention, not a retry).
+- Deadline/`:timeout`; policy-signalled completion (`act/2` → `{:done, state}`);
+  action-conversion errors surfaced as `{:error, {:action_conversion, _}}`.
+- Reads robot state via `BB.Robot.Runtime.get_robot_state/1`; applies
+  `BB.Policy.ActuatorCommand`s via `BB.Actuator` (new `ActuatorCommand` struct +
+  dispatcher, since core has no command type).
+- Episode + per-tick inference telemetry (`BB.Policy.Telemetry`).
+- **Done:** 14 runner/command tests cover completion, timeout, disarm (both
+  forms), init error, conversion error, command application/gating, and
+  telemetry. Full suite (38 tests + 2 doctests) green; format, `credo --strict`
+  (only phase TODO suggestions), and dialyzer clean.
+
+  The bb boundary (`BB.Safety`, `BB.Robot.Runtime`, `BB.Actuator`) is stubbed
+  with Mimic in global mode (the runner runs in its own process). A full
+  `simulation: :kinematic` robot integration test is deferred to Phase 3, where
+  a real ONNX policy gives it something meaningful to drive.
 
 ### Phase 3 — ONNX on dev box (D5)
 

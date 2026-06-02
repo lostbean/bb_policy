@@ -117,17 +117,20 @@ defmodule BB.Policy do
 
   Given an observation, returns the action to execute and the updated state.
   Recurrent and chunking policies update their hidden state / action queue here.
+
+  A policy that has reached its goal returns `{:done, state}` instead of an
+  action; `BB.Policy.Runner` then ends the episode with reason `:completed`.
   """
-  @callback act(observation(), state()) :: {action(), state()}
+  @callback act(observation(), state()) :: {action() | :done, state()}
 
   @doc """
   Convert an action into actuator commands.
 
-  Denormalises the action and builds commands suitable for `BB.Actuator`. The
+  Denormalises the action and builds `BB.Policy.ActuatorCommand` structs. The
   runner applies the returned commands (subject to safety) on this tick.
   """
   @callback action_to_commands(action(), robot :: module(), state()) ::
-              {:ok, [BB.Actuator.command()]} | {:error, term()}
+              {:ok, [BB.Policy.ActuatorCommand.t()]} | {:error, term()}
 
   @doc """
   Return policy metadata for introspection (architecture, input/output spec, …).

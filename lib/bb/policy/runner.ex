@@ -13,15 +13,17 @@ defmodule BB.Policy.Runner do
 
   It owns:
 
-    * **Observation collection** — reads robot state and the latest sensor
-      payloads and hands them to the policy's `c:BB.Policy.observe/3`.
+    * **Observation collection** — reads robot state from `BB.Robot.Runtime` and
+      hands it to the policy's `c:BB.Policy.observe/3`.
     * **Inference scheduling** — ticks at `:rate_hz`, rescheduled per tick via
       `Process.send_after/3` (the ecosystem idiom; see `BB.PID.Controller`).
-    * **Action application** — applies commands via `BB.Actuator`, but only
-      while `BB.Safety.armed?/1` is true. A disarm halts the episode.
+    * **Action application** — applies `BB.Policy.ActuatorCommand`s via
+      `BB.Actuator`, but only while `BB.Safety.armed?/1` is true. A disarm halts
+      the episode.
     * **Episode lifecycle** — calls `c:BB.Policy.reset/1` at episode start and
-      terminates on completion, timeout, safety intervention, or cancellation.
-    * **Telemetry** — emits `[:bb, :policy, ...]` events (see `BB.Policy.Telemetry`).
+      ends on completion (`{:done, state}` from `act/2`), timeout, safety
+      intervention, or cancellation.
+    * **Telemetry** — emits `[:bb, :policy, …]` events (see `BB.Policy.Telemetry`).
 
   ## Entry point
 
@@ -38,6 +40,10 @@ defmodule BB.Policy.Runner do
           rate_hz: 20,
           timeout: :timer.seconds(30)
         )
+
+  `run/4` blocks until the episode ends and returns `{:ok, reason}` where
+  `reason` is `:completed`, `:timeout`, or `:disarmed`; or `{:error, term}` if
+  the policy fails to initialise or an action conversion errors.
 
   > #### Public API note {: .info}
   >
@@ -56,13 +62,17 @@ defmodule BB.Policy.Runner do
 
   use GenServer
 
+  require Logger
+
+  alias BB.Policy.ActuatorCommand
+  alias BB.Policy.Telemetry
   alias BB.Process, as: BBProcess
 
   @default_rate_hz 20
   @default_timeout :timer.seconds(30)
 
-  @type goal :: term()
-  @type result :: term()
+  @type reason :: :completed | :timeout | :disarmed | {:error, term()}
+  @type run_result :: {:ok, reason()} | {:error, term()}
 
   defstruct [
     :robot,
@@ -70,9 +80,11 @@ defmodule BB.Policy.Runner do
     :policy_state,
     :goal,
     :rate_hz,
+    :interval_ms,
     :timeout,
     :deadline,
     :tick_ref,
+    :owner,
     episode_step: 0
   ]
 
@@ -80,7 +92,7 @@ defmodule BB.Policy.Runner do
   @type t :: %__MODULE__{}
 
   @doc """
-  Start a runner under a supervisor, registered per-robot.
+  Start a runner under the robot's registry as a named process.
 
   Prefer `run/4` for one-shot episodic execution; use `start_link/1` when you
   want to supervise a long-lived policy process yourself.
@@ -94,61 +106,154 @@ defmodule BB.Policy.Runner do
   @doc """
   Run a policy on `robot` until completion, timeout, or safety intervention.
 
-  Blocks the caller until the episode finishes and returns the policy's result.
-  See the moduledoc for options.
+  Blocks the caller until the episode finishes and returns its result. See the
+  moduledoc for options and return values.
   """
-  @spec run(robot :: module(), policy :: module(), goal(), keyword()) ::
-          {:ok, result()} | {:error, term()}
+  @spec run(robot :: module(), policy :: module(), term(), keyword()) :: run_result()
   def run(robot, policy_module, goal, opts \\ []) do
-    # TODO(phase: vertical-slice): start a (possibly transient) runner, await
-    # the episode result, and tear it down. Pulls together start_link/1 +
-    # the tick loop + a blocking await akin to BB.Command.await/2.
-    _ = {robot, policy_module, goal, opts}
-    {:error, :not_implemented}
+    opts =
+      opts
+      |> Keyword.merge(robot: robot, policy: policy_module, goal: goal, owner: self())
+
+    # Unnamed, transient runner: an episode is a one-shot, and run/4 may be
+    # called repeatedly, so we don't register it under the robot's :policy_runner.
+    case GenServer.start(__MODULE__, opts) do
+      {:ok, pid} -> await_episode(pid)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp await_episode(pid) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:episode_result, ^pid, result} ->
+        Process.demonitor(ref, [:flush])
+        result
+
+      {:DOWN, ^ref, :process, ^pid, :normal} ->
+        # Stopped without reporting (shouldn't happen) — treat as completed.
+        {:ok, :completed}
+
+      {:DOWN, ^ref, :process, ^pid, down_reason} ->
+        {:error, down_reason}
+    end
   end
 
   @impl GenServer
   def init(opts) do
     robot = Keyword.fetch!(opts, :robot)
     policy_module = Keyword.fetch!(opts, :policy)
+    policy_opts = Keyword.get(opts, :policy_opts, [])
+    rate_hz = Keyword.get(opts, :rate_hz, @default_rate_hz)
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+    goal = Keyword.get(opts, :goal)
 
-    state = %__MODULE__{
-      robot: robot,
-      policy_module: policy_module,
-      goal: Keyword.get(opts, :goal),
-      rate_hz: Keyword.get(opts, :rate_hz, @default_rate_hz),
-      timeout: Keyword.get(opts, :timeout, @default_timeout)
-    }
+    case policy_module.init(policy_opts) do
+      {:ok, policy_state} ->
+        state = %__MODULE__{
+          robot: robot,
+          policy_module: policy_module,
+          policy_state: policy_module.reset(policy_state),
+          goal: goal,
+          rate_hz: rate_hz,
+          interval_ms: max(1, div(1000, rate_hz)),
+          timeout: timeout,
+          deadline: monotonic_ms() + timeout,
+          owner: Keyword.get(opts, :owner),
+          episode_step: 0
+        }
 
-    # TODO(phase: vertical-slice):
-    #   * policy_module.init(policy_opts) -> policy_state (or {:stop, reason})
-    #   * policy_module.reset/1 to start a clean episode
-    #   * compute deadline from timeout
-    #   * subscribe to sensor topics OR plan to poll BB.Robot.Runtime each tick
-    #   * schedule first tick
-    {:ok, state}
+        Telemetry.episode_start(robot, policy_module, goal)
+        {:ok, schedule_tick(state), {:continue, :first_tick}}
+
+      {:error, reason} ->
+        {:stop, {:policy_init, reason}}
+    end
   end
 
   @impl GenServer
+  def handle_continue(:first_tick, state), do: {:noreply, state}
+
+  @impl GenServer
   def handle_info(:tick, %__MODULE__{} = state) do
-    # TODO(phase: vertical-slice): the loop body.
-    #
-    #   1. Deadline check -> {:stop, :timeout} when exceeded.
-    #   2. BB.Safety.armed?/1 — if not armed, halt the episode (a disarm
-    #      mid-episode is a safety intervention, not an error to retry).
-    #   3. robot_state = BB.Robot.Runtime.get_robot_state(state.robot)
-    #      sensors     = latest sensor payloads
-    #   4. {obs, ps}      = policy_module.observe(robot_state, sensors, ps)
-    #      {action, ps}   = policy_module.act(obs, ps)
-    #      {:ok, cmds}    = policy_module.action_to_commands(action, robot, ps)
-    #   5. Apply cmds via BB.Actuator (only while armed).
-    #   6. Emit telemetry (inference time, step count).
-    #   7. Reschedule the next tick.
-    {:noreply, reschedule_tick(state)}
+    cond do
+      monotonic_ms() >= state.deadline ->
+        finish(state, :timeout)
+
+      not BB.Safety.armed?(state.robot) ->
+        # A disarm (or never having armed) is a safety intervention, not a
+        # retryable error — end the episode.
+        finish(state, :disarmed)
+
+      true ->
+        run_step(state)
+    end
   end
 
-  defp reschedule_tick(%__MODULE__{rate_hz: rate_hz} = state) do
-    interval_ms = max(1, div(1000, rate_hz))
+  @impl GenServer
+  def terminate(_reason, _state), do: :ok
+
+  # --- the control step ----------------------------------------------------
+
+  defp run_step(%__MODULE__{} = state) do
+    %{policy_module: policy_module, robot: robot} = state
+    robot_state = BB.Robot.Runtime.get_robot_state(robot)
+    sensors = %{}
+
+    started = System.monotonic_time()
+    {observation, ps} = policy_module.observe(robot_state, sensors, state.policy_state)
+
+    case policy_module.act(observation, ps) do
+      {:done, ps} ->
+        finish(%{state | policy_state: ps}, :completed)
+
+      {action, ps} ->
+        emit_inference(state, started)
+        apply_action(%{state | policy_state: ps}, policy_module, robot, action)
+    end
+  end
+
+  defp apply_action(state, policy_module, robot, action) do
+    case policy_module.action_to_commands(action, robot, state.policy_state) do
+      {:ok, commands} ->
+        Enum.each(commands, &ActuatorCommand.apply(&1, robot))
+        {:noreply, schedule_tick(%{state | episode_step: state.episode_step + 1})}
+
+      {:error, reason} ->
+        finish(state, {:error, {:action_conversion, reason}})
+    end
+  end
+
+  # --- episode termination -------------------------------------------------
+
+  defp finish(%__MODULE__{} = state, reason) do
+    Telemetry.episode_stop(state.robot, state.policy_module, state.episode_step, reason)
+    report(state, reason)
+    {:stop, :normal, state}
+  end
+
+  defp report(%__MODULE__{owner: nil}, _reason), do: :ok
+
+  defp report(%__MODULE__{owner: owner} = state, reason) do
+    send(owner, {:episode_result, self(), result_for(reason)})
+    _ = state
+    :ok
+  end
+
+  defp result_for({:error, _} = error), do: error
+  defp result_for(reason), do: {:ok, reason}
+
+  # --- helpers -------------------------------------------------------------
+
+  defp schedule_tick(%__MODULE__{interval_ms: interval_ms} = state) do
     %{state | tick_ref: Process.send_after(self(), :tick, interval_ms)}
   end
+
+  defp emit_inference(%__MODULE__{} = state, started) do
+    duration = System.monotonic_time() - started
+    Telemetry.inference_stop(state.robot, state.policy_module, state.episode_step, duration)
+  end
+
+  defp monotonic_ms, do: System.monotonic_time(:millisecond)
 end

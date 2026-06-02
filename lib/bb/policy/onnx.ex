@@ -66,6 +66,10 @@ defmodule BB.Policy.ONNX do
 
   @behaviour BB.Policy
 
+  # These callbacks are stubs that always raise until the ortex-dev-box phase,
+  # so dialyzer correctly sees no local return. Suppress until implemented.
+  @dialyzer {:no_return, observe: 3, act: 2}
+
   defstruct [
     :model,
     :normalizer,
@@ -94,18 +98,16 @@ defmodule BB.Policy.ONNX do
   end
 
   @impl BB.Policy
-  def observe(_robot_state, _sensors, %__MODULE__{} = state) do
+  def observe(_robot_state, _sensors, %__MODULE__{} = _state) do
     # TODO(phase: ortex-dev-box): gather observation_keys, normalise, return tensors.
-    raise "not implemented"
-    {%{}, state}
+    raise "BB.Policy.ONNX.observe/3 not implemented (phase: ortex-dev-box)"
   end
 
   @impl BB.Policy
-  def act(_observation, %__MODULE__{} = state) do
+  def act(_observation, %__MODULE__{} = _state) do
     # TODO(phase: ortex-dev-box): build input tuple, Ortex.run/2, slice the
     # action chunk, manage the receding-horizon queue in state.
-    raise "not implemented"
-    {%{}, state}
+    raise "BB.Policy.ONNX.act/2 not implemented (phase: ortex-dev-box)"
   end
 
   @impl BB.Policy

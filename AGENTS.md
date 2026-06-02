@@ -84,8 +84,10 @@ check `→` apply via `BB.Actuator`.
 - **Reading robot state:** `BB.Robot.Runtime.get_robot_state/1` then the
   `BB.Robot.State` accessors; or subscribe via `BB.PubSub.subscribe/2,3` and
   cache the latest payloads.
-- **Commands out:** build `BB.Actuator.command()` values; apply with
-  `BB.Actuator` (`set_position/4`, `set_velocity/3`, …).
+- **Commands out:** a policy's `action_to_commands/3` returns
+  `BB.Policy.ActuatorCommand` structs (core has no command type of its own); the
+  runner dispatches each to `BB.Actuator` (`set_position/4`, `set_velocity/4`, …)
+  while armed.
 - **Errors:** prefer structured `BB.Error` types over ad-hoc tuples where they
   fit; all `BB.Error` types must implement `BB.Error.Severity`.
 - **Telemetry:** emit through `BB.Telemetry`, event names `[:bb, :policy, …]`.
