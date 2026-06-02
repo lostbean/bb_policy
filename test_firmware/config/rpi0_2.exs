@@ -23,11 +23,16 @@ config :logger, backends: [RingLogger]
 # on configuring nerves_ssh.
 
 keys =
-  [
-    Path.join([System.user_home!(), ".ssh", "id_rsa.pub"]),
-    Path.join([System.user_home!(), ".ssh", "id_ecdsa.pub"]),
-    Path.join([System.user_home!(), ".ssh", "id_ed25519.pub"])
-  ]
+  # Extra authorized keys for clients other than the build host — e.g. when
+  # the firmware is built on a remote aarch64 box (server-haus) but you ssh
+  # to the device from a different laptop. Drop any *.pub here on the build
+  # host. See documentation/how-to/end-to-end-on-pi-zero-2.md.
+  ([
+     Path.join([System.user_home!(), ".ssh", "id_rsa.pub"]),
+     Path.join([System.user_home!(), ".ssh", "id_ecdsa.pub"]),
+     Path.join([System.user_home!(), ".ssh", "id_ed25519.pub"])
+   ] ++
+     Path.wildcard(Path.join([System.user_home!(), ".ssh", "authorized_keys.d", "*.pub"])))
   |> Enum.filter(&File.exists?/1)
 
 if keys == [],
