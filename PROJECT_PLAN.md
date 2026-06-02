@@ -108,12 +108,15 @@ Each phase is a vertical slice that leaves the tree green (`mix check`).
   `ONNX`, `Telemetry`; `BB.Policy.run/4` facade.
 - `MockPolicy` test support + behaviour-contract tests.
 
-### Phase 1 — Normalizer (no robot, no ML)
+### Phase 1 — Normalizer (no robot, no ML) ✅
 
-- Implement `:min_max`, `:z_score`, `:identity` in `normalize/3`/`denormalize/3`
-  with scalar and per-element (tensor) stats; round-trip property tested.
-- `Normalizer.load/1` parses the exported stats JSON.
-- **Done when:** normaliser is fully tested; `mix check` green.
+- `:z_score`, `:min_max` (`[0,1]` and `[-1,1]`), `:identity` via `normalize/4` /
+  `denormalize/4`, keyed per `:observation`/`:action` space with **per-key**
+  strategy; scalar and per-element (tensor) moments; exact round-trip.
+- Numerical safety: zero std / `min == max` treated as unit scale (no NaN/Inf).
+- `new/1` (+ `new!/1`) validation, `stats_from_samples/3`, and `load/1` parsing
+  the exported stats JSON via the stdlib `JSON` module (no extra dependency).
+- **Done:** 22 tests + 2 doctests green; `mix format` and `credo --strict` clean.
 
 ### Phase 2 — Runner vertical slice (sim robot, MockPolicy)
 
