@@ -193,11 +193,27 @@ Each phase is a vertical slice that leaves the tree green (`mix check`).
   integration is documented and follows from the standard command contract but
   isn't yet exercised in a test (would need a DSL robot + reactor harness).
 
-### Phase 5 — `BB.Controller` path (D2) + temporal ensembling
+### Phase 5 — `BB.Controller` path (D2) + temporal ensembling ✅
 
-- `use BB.Controller` runner variant for DSL-declared, continuously-running
-  policies, with a `disarm/1` that stops inference.
-- Temporal-ensembling action-selection regime alongside the queue.
+- `BB.Policy.Controller` (`use BB.Controller`): runs a policy *continuously* as
+  a DSL-declared, supervised controller (vs. the bounded episode of Runner /
+  Command). Ticks at `:rate`, runs one `BB.Policy.Step` while armed, idles +
+  resets the policy while disarmed, and exposes `disarm/1`. A `{:done, _}` just
+  resets and keeps running — a standing controller has no terminal state.
+- Temporal ensembling in `BB.Policy.ONNX`: `:temporal_ensemble_coeff` switches
+  from the receding-horizon queue to inferring every tick and blending all
+  overlapping chunk predictions for the current step with weights
+  `exp(-coeff · age)`; stale chunks are pruned. The queue regime stays the
+  default.
+- **Done:** 8 controller tests (init, init failure, armed step + command, idle
+  while disarmed, `:done` keeps running, disarm) + ONNX chunk-queue and
+  ensembling tests verifying exact blended values (avg at coeff 0; the
+  `exp(-1)`-weighted mix at coeff 1) against a new `chunk_policy.onnx` fixture
+  (`[1, 2, 2]` output). With `ORTEX=1`: 61 tests + 2 doctests; without: 52 (9
+  excluded). format / warnings-as-errors / credo / dialyzer / reuse all clean.
+
+  Not yet done (deferred): an end-to-end test of the controller inside a live
+  supervised robot via the DSL (the callbacks are tested directly).
 
 ### Phase 6 — Nerves / aarch64 deployment (R1)
 

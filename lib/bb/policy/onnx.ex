@@ -42,6 +42,9 @@ defmodule BB.Policy.ONNX do
     * `:execution_providers` — ordered Ortex execution-provider list. Default
       `[:cpu]`. Note ort silently falls back to CPU if a provider isn't compiled
       in (see PROJECT_PLAN R4).
+    * `:temporal_ensemble_coeff` — when set to a number, selects temporal
+      ensembling instead of the receding-horizon queue (see "Action chunking").
+      Larger values weight the most recent chunk more heavily.
 
   ## Inference: `Ortex.run/2`, not batched serving
 
@@ -66,12 +69,18 @@ defmodule BB.Policy.ONNX do
 
   ## Action chunking (ACT)
 
-  ACT predicts a horizon of future actions per inference. This module implements
-  the **receding-horizon queue**: each `c:BB.Policy.act/2` pops one action row;
-  when the queue empties it runs one inference and refills from the predicted
-  chunk. A model that outputs a single action (`[1, action_dim]`) is treated as
-  a chunk of length one — i.e. inference every tick. Temporal ensembling is a
-  later phase.
+  ACT predicts a horizon of future actions per inference. Two regimes:
+
+    * **Receding-horizon queue** (default) — each `c:BB.Policy.act/2` pops one
+      action row; when the queue empties it runs one inference and refills from
+      the predicted chunk. Cheaper, fewer inferences. A model that outputs a
+      single action (`[1, action_dim]`) is a chunk of length one — inference
+      every tick.
+    * **Temporal ensembling** (`:temporal_ensemble_coeff` set) — infer every
+      tick; for the current timestep, blend the predictions of all overlapping
+      chunks with exponential weights `wᵢ = exp(-coeff · age)`. Smoother, more
+      compute. Stale chunks (whose horizon no longer covers the next step) are
+      dropped.
 
   > #### Optional dependency {: .info}
   >
@@ -91,7 +100,10 @@ defmodule BB.Policy.ONNX do
     :normalizer,
     :observation,
     :action,
-    :action_queue
+    :ensemble_coeff,
+    action_queue: [],
+    chunks: [],
+    step: 0
   ]
 
   @type source :: :positions | :velocities
@@ -103,7 +115,10 @@ defmodule BB.Policy.ONNX do
           normalizer: Normalizer.t(),
           observation: observation_spec(),
           action: action_spec(),
-          action_queue: [Nx.Tensor.t()]
+          ensemble_coeff: float() | nil,
+          action_queue: [Nx.Tensor.t()],
+          chunks: [{non_neg_integer(), Nx.Tensor.t()}],
+          step: non_neg_integer()
         }
 
   @impl BB.Policy
@@ -126,13 +141,13 @@ defmodule BB.Policy.ONNX do
          normalizer: normalizer,
          observation: observation,
          action: action,
-         action_queue: []
+         ensemble_coeff: opts[:temporal_ensemble_coeff]
        }}
     end
   end
 
   @impl BB.Policy
-  def reset(%__MODULE__{} = state), do: %{state | action_queue: []}
+  def reset(%__MODULE__{} = state), do: %{state | action_queue: [], chunks: [], step: 0}
 
   @impl BB.Policy
   def observe(robot_state, _sensors, %__MODULE__{} = state) do
@@ -145,10 +160,21 @@ defmodule BB.Policy.ONNX do
     {%{input: normalised}, state}
   end
 
+  # Temporal ensembling: infer every tick, then blend every stored chunk's
+  # prediction for the current absolute step with exponential weights
+  # w_i = exp(-coeff * age). Smoother, more compute (PROJECT_PLAN D5/§6.5).
   @impl BB.Policy
-  def act(%{input: input}, %__MODULE__{action_queue: []} = state) do
+  def act(%{input: input}, %__MODULE__{ensemble_coeff: coeff} = state) when is_number(coeff) do
     chunk = run_inference(state.model, input)
-    [row | rest] = rows(chunk)
+    chunks = [{state.step, chunk} | state.chunks]
+    {action, chunks} = ensemble(chunks, state.step, coeff)
+    {%{action: action}, %{state | chunks: chunks, step: state.step + 1}}
+  end
+
+  # Receding-horizon queue (default): execute the predicted chunk one row per
+  # tick; infer again only when the queue empties. Cheaper, fewer inferences.
+  def act(%{input: input}, %__MODULE__{action_queue: []} = state) do
+    [row | rest] = rows(run_inference(state.model, input))
     {%{action: row}, %{state | action_queue: rest}}
   end
 
@@ -226,6 +252,32 @@ defmodule BB.Policy.ONNX do
       {1, chunk, _dim} -> for i <- 0..(chunk - 1), do: output[0][i]
       {_dim} -> [output]
     end
+  end
+
+  # Blend every chunk's prediction for absolute step `step` with exponential
+  # weights decaying by chunk age, then drop chunks that no longer cover `step`.
+  defp ensemble(chunks, step, coeff) do
+    contributions =
+      for {start, chunk} <- chunks,
+          rows = rows(chunk),
+          (idx = step - start) < length(rows),
+          idx >= 0 do
+        {Enum.at(rows, idx), :math.exp(-coeff * idx)}
+      end
+
+    weighted =
+      contributions
+      |> Enum.map(fn {row, w} -> Nx.multiply(row, w) end)
+      |> Enum.reduce(&Nx.add/2)
+
+    total = contributions |> Enum.map(&elem(&1, 1)) |> Enum.sum()
+    action = Nx.divide(weighted, total)
+
+    # Keep only chunks whose horizon still covers the *next* step.
+    live =
+      for {start, chunk} <- chunks, step + 1 - start < length(rows(chunk)), do: {start, chunk}
+
+    {action, live}
   end
 
   defp build_command(:position, joint, value), do: ActuatorCommand.position(joint, value)

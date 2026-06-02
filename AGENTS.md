@@ -69,8 +69,9 @@ pinned to match `.tool-versions`, which stays authoritative for CI).
 ```
 BB.Policy            # the behaviour: init/1 reset/1 observe/3 act/2 action_to_commands/3
    ├─ BB.Policy.Step          # one control cycle (observe→act→commands→apply); shared
-   ├─ BB.Policy.Runner        # GenServer control loop; BB.Policy.run/4 entry point
-   ├─ BB.Policy.Command       # use BB.Command — run a policy as a robot command (reactor-usable)
+   ├─ BB.Policy.Runner        # GenServer control loop; BB.Policy.run/4 entry point (bounded episode)
+   ├─ BB.Policy.Command       # use BB.Command — run a policy as a robot command (reactor-usable, bounded)
+   ├─ BB.Policy.Controller    # use BB.Controller — run a policy continuously (DSL-declared, standing)
    ├─ BB.Policy.ActuatorCommand # command struct a policy emits; dispatched to BB.Actuator
    ├─ BB.Policy.Normalizer    # min-max / z-score / identity scaling (pure Nx)
    ├─ BB.Policy.ONNX          # @behaviour BB.Policy, loads models via Ortex (optional dep)

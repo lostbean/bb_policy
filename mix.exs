@@ -62,7 +62,8 @@ defmodule BB.Policy.MixProject do
         Core: [
           BB.Policy,
           BB.Policy.Runner,
-          BB.Policy.Command
+          BB.Policy.Command,
+          BB.Policy.Controller
         ],
         Implementations: [
           BB.Policy.ONNX

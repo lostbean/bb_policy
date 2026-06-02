@@ -15,6 +15,7 @@ defmodule BB.Policy.ONNXTest do
 
   @moduletag :ortex
   @model "test/fixtures/linear_policy.onnx"
+  @chunk_model "test/fixtures/chunk_policy.onnx"
 
   setup :set_mimic_global
 
@@ -102,7 +103,7 @@ defmodule BB.Policy.ONNXTest do
     end
   end
 
-  describe "action chunking" do
+  describe "action chunking — receding-horizon queue (default)" do
     test "a single-action model infers on every act/2 (queue stays empty)" do
       {:ok, state} = ONNX.init(@policy_opts)
       robot_state = robot_state_with(%{a: 1.0, b: 2.0, c: 3.0})
@@ -110,6 +111,79 @@ defmodule BB.Policy.ONNXTest do
 
       {_a1, state} = ONNX.act(observation, state)
       assert state.action_queue == []
+    end
+
+    test "a chunk model serves the chunk one row per tick, re-inferring when empty" do
+      # chunk_policy: obs [5,7,9] -> chunk [[5,7],[6,8]].
+      opts = [
+        model: @chunk_model,
+        observation: [positions: [:a, :b, :c]],
+        action: [{[:x, :y], :position}]
+      ]
+
+      {:ok, state} = ONNX.init(opts)
+      {obs, state} = ONNX.observe(robot_state_with(%{a: 5.0, b: 7.0, c: 9.0}), %{}, state)
+
+      {%{action: a1}, state} = ONNX.act(obs, state)
+      assert close?(a1, [5.0, 7.0])
+      assert length(state.action_queue) == 1
+
+      # second tick serves the queued row without re-inferring
+      {%{action: a2}, state} = ONNX.act(obs, state)
+      assert close?(a2, [6.0, 8.0])
+      assert state.action_queue == []
+
+      # third tick re-infers (queue empty) -> back to row 0
+      {%{action: a3}, _state} = ONNX.act(obs, state)
+      assert close?(a3, [5.0, 7.0])
+    end
+  end
+
+  describe "action chunking — temporal ensembling" do
+    test "blends overlapping chunk predictions for the current step" do
+      # coeff 0.0 -> equal weights, so overlapping rows are simply averaged.
+      opts = [
+        model: @chunk_model,
+        observation: [positions: [:a, :b, :c]],
+        action: [{[:x, :y], :position}],
+        temporal_ensemble_coeff: 0.0
+      ]
+
+      {:ok, state} = ONNX.init(opts)
+      {obs, state} = ONNX.observe(robot_state_with(%{a: 5.0, b: 7.0, c: 9.0}), %{}, state)
+
+      # step 0: only chunk@0 row0 = [5,7]
+      {%{action: a0}, state} = ONNX.act(obs, state)
+      assert close?(a0, [5.0, 7.0])
+      assert state.step == 1
+
+      # step 1: chunk@1 row0 = [5,7] and chunk@0 row1 = [6,8], averaged -> [5.5, 7.5]
+      {%{action: a1}, state} = ONNX.act(obs, state)
+      assert close?(a1, [5.5, 7.5])
+
+      # chunk@0 is now stale (horizon 2 no longer covers step 2) and is dropped
+      assert length(state.chunks) == 1
+    end
+
+    test "weights the most recent chunk more heavily with a positive coeff" do
+      opts = [
+        model: @chunk_model,
+        observation: [positions: [:a, :b, :c]],
+        action: [{[:x, :y], :position}],
+        temporal_ensemble_coeff: 1.0
+      ]
+
+      {:ok, state} = ONNX.init(opts)
+      {obs, state} = ONNX.observe(robot_state_with(%{a: 5.0, b: 7.0, c: 9.0}), %{}, state)
+
+      {_a0, state} = ONNX.act(obs, state)
+      {%{action: a1}, _state} = ONNX.act(obs, state)
+
+      # ([5,7]*1 + [6,8]*e^-1) / (1 + e^-1)
+      w = :math.exp(-1.0)
+      ex = (5.0 + 6.0 * w) / (1 + w)
+      ey = (7.0 + 8.0 * w) / (1 + w)
+      assert close?(a1, [ex, ey])
     end
   end
 
