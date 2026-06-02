@@ -91,6 +91,10 @@ defmodule BB.Policy.MixProject do
       {:nx, "~> 0.12"},
       ortex_dep(),
 
+      # bb_reactor is an optional integration point (BB.Policy.Command is usable
+      # as a reactor step); pulled in for tests only so we can exercise that.
+      {:bb_reactor, "~> 0.1", only: :test},
+
       # dev/test
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
