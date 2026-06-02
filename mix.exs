@@ -61,13 +61,16 @@ defmodule BB.Policy.MixProject do
       groups_for_modules: [
         Core: [
           BB.Policy,
-          BB.Policy.Runner
+          BB.Policy.Runner,
+          BB.Policy.Command
         ],
         Implementations: [
           BB.Policy.ONNX
         ],
         Support: [
+          BB.Policy.ActuatorCommand,
           BB.Policy.Normalizer,
+          BB.Policy.Step,
           BB.Policy.Telemetry
         ]
       ],

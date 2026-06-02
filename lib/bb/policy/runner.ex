@@ -64,10 +64,9 @@ defmodule BB.Policy.Runner do
 
   require Logger
 
-  alias BB.Policy.ActuatorCommand
+  alias BB.Policy.Step
   alias BB.Policy.Telemetry
   alias BB.Process, as: BBProcess
-  alias BB.Robot.Runtime
 
   @default_rate_hz 20
   @default_timeout :timer.seconds(30)
@@ -198,31 +197,18 @@ defmodule BB.Policy.Runner do
   # --- the control step ----------------------------------------------------
 
   defp run_step(%__MODULE__{} = state) do
-    %{policy_module: policy_module, robot: robot} = state
-    robot_state = Runtime.get_robot_state(robot)
-    sensors = %{}
-
-    started = System.monotonic_time()
-    {observation, ps} = policy_module.observe(robot_state, sensors, state.policy_state)
-
-    case policy_module.act(observation, ps) do
+    case Step.run(state.policy_module, state.policy_state, state.robot) do
       {:done, ps} ->
         finish(%{state | policy_state: ps}, :completed)
 
-      {action, ps} ->
-        emit_inference(state, started)
-        apply_action(%{state | policy_state: ps}, policy_module, robot, action)
-    end
-  end
+      {:applied, ps, %{inference_duration: duration}} ->
+        Telemetry.inference_stop(state.robot, state.policy_module, state.episode_step, duration)
 
-  defp apply_action(state, policy_module, robot, action) do
-    case policy_module.action_to_commands(action, robot, state.policy_state) do
-      {:ok, commands} ->
-        Enum.each(commands, &ActuatorCommand.apply(&1, robot))
-        {:noreply, schedule_tick(%{state | episode_step: state.episode_step + 1})}
+        {:noreply,
+         schedule_tick(%{state | policy_state: ps, episode_step: state.episode_step + 1})}
 
-      {:error, reason} ->
-        finish(state, {:error, {:action_conversion, reason}})
+      {:error, _reason} = error ->
+        finish(state, error)
     end
   end
 
@@ -249,11 +235,6 @@ defmodule BB.Policy.Runner do
 
   defp schedule_tick(%__MODULE__{interval_ms: interval_ms} = state) do
     %{state | tick_ref: Process.send_after(self(), :tick, interval_ms)}
-  end
-
-  defp emit_inference(%__MODULE__{} = state, started) do
-    duration = System.monotonic_time() - started
-    Telemetry.inference_stop(state.robot, state.policy_module, state.episode_step, duration)
   end
 
   defp monotonic_ms, do: System.monotonic_time(:millisecond)

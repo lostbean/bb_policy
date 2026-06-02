@@ -165,11 +165,33 @@ Each phase is a vertical slice that leaves the tree green (`mix check`).
   `BB.Policy.Runner` with this policy (the runner + ONNX are each tested in
   isolation); temporal ensembling; multi-input models (e.g. vision + state).
 
-### Phase 4 — Reactor command wrapper (proposal "Should Have")
+### Phase 4 — Policy-as-command + reactor integration ✅
 
-- `BB.Policy.Command` usable as a `bb_reactor` step: callable as
-  `robot.command(goal) → {:ok, pid}`, exits `:normal` on completion so the
-  reactor's monitor resolves; safety disarm surfaces as `:halt`.
+- `BB.Policy.Command` is a `use BB.Command` handler (generic, configured by
+  `policy:` / `policy_opts:` / `rate_hz:` opts — D-API choice). Declaring it on
+  a robot makes a policy a first-class command: awaitable via
+  `BB.Command.await/2`, governed by the safety state machine, and usable as a
+  `bb_reactor` `command :name` step with no extra glue.
+- It runs the policy in the command lifecycle: `init/1` inits the policy;
+  `handle_command/3` resets and schedules the first tick; `handle_info(:tick,…)`
+  runs one `BB.Policy.Step` and reschedules, stopping `{:ok, :completed}` on
+  `{:done, _}` or `{:error, {:action_conversion, _}}` on a conversion failure.
+  Timeout is the command's DSL `timeout`; safety disarm uses `BB.Command`'s
+  default `handle_safety_state_change/2` (`:disarmed`), which a reactor step
+  surfaces as `{:halt, :safety_disarmed}`.
+- Refactor: the control cycle (observe → act → action_to_commands → apply) was
+  extracted into `BB.Policy.Step`, now shared by `Runner` and `Command` (no
+  duplication; the runner keeps scheduling/deadline/owner-reporting).
+- **Done:** 8 command tests (init, init-failure, tick loop to completion,
+  command application, conversion error, result extraction, disarm handling).
+  Full suite green (without Ortex: 46 tests, 6 excluded; with `ORTEX=1`: 52
+  tests + 2 doctests); format / warnings-as-errors / credo / dialyzer / reuse
+  all clean.
+
+  Not yet done (deferred): an end-to-end test through the real command server +
+  a live robot (callbacks are tested directly); the `bb_reactor` workflow
+  integration is documented and follows from the standard command contract but
+  isn't yet exercised in a test (would need a DSL robot + reactor harness).
 
 ### Phase 5 — `BB.Controller` path (D2) + temporal ensembling
 

@@ -68,14 +68,19 @@ pinned to match `.tool-versions`, which stays authoritative for CI).
 
 ```
 BB.Policy            # the behaviour: init/1 reset/1 observe/3 act/2 action_to_commands/3
-   ├─ BB.Policy.Runner      # GenServer control loop; BB.Policy.run/4 entry point
-   ├─ BB.Policy.Normalizer  # min-max / z-score / identity scaling (pure Nx)
-   ├─ BB.Policy.ONNX        # @behaviour BB.Policy, loads models via Ortex
-   └─ BB.Policy.Telemetry   # [:bb, :policy, …] event contract
+   ├─ BB.Policy.Step          # one control cycle (observe→act→commands→apply); shared
+   ├─ BB.Policy.Runner        # GenServer control loop; BB.Policy.run/4 entry point
+   ├─ BB.Policy.Command       # use BB.Command — run a policy as a robot command (reactor-usable)
+   ├─ BB.Policy.ActuatorCommand # command struct a policy emits; dispatched to BB.Actuator
+   ├─ BB.Policy.Normalizer    # min-max / z-score / identity scaling (pure Nx)
+   ├─ BB.Policy.ONNX          # @behaviour BB.Policy, loads models via Ortex (optional dep)
+   └─ BB.Policy.Telemetry     # [:bb, :policy, …] event contract
 ```
 
-The runner cycle, each tick: `observe/3 → act/2 → action_to_commands/3 →` safety
-check `→` apply via `BB.Actuator`.
+The control cycle (`BB.Policy.Step.run/3`), each tick: `observe/3 → act/2 →
+action_to_commands/3 →` apply via `BB.Actuator`. `Runner` and `Command` both
+call it; each owns its own scheduling, timeout, safety gate, and telemetry. A
+policy reaches its goal by returning `{:done, state}` from `act/2`.
 
 ## Key Patterns (match the ecosystem)
 
