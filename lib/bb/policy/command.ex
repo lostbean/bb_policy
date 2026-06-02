@@ -70,7 +70,16 @@ defmodule BB.Policy.Command do
       step surfaces this as `{:halt, :safety_disarmed}`).
   """
 
-  use BB.Command
+  use BB.Command,
+    options_schema: [
+      policy: [type: :atom, required: true, doc: "Module implementing BB.Policy"],
+      policy_opts: [
+        type: :keyword_list,
+        default: [],
+        doc: "Options passed to the policy's init/1"
+      ],
+      rate_hz: [type: :pos_integer, default: 20, doc: "Control-loop frequency (Hz)"]
+    ]
 
   alias BB.Policy.Step
   alias BB.Policy.Telemetry
