@@ -63,8 +63,6 @@ defmodule BB.Policy.Runner do
 
   use GenServer
 
-  require Logger
-
   alias BB.Policy.Step
   alias BB.Policy.Telemetry
   alias BB.Process, as: BBProcess
