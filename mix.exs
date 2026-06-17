@@ -20,7 +20,7 @@ defmodule BB.Policy.MixProject do
       description: @moduledoc,
       dialyzer: dialyzer(),
       docs: docs(),
-      elixir: "~> 1.19",
+      elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       package: package(),
       start_permanent: Mix.env() == :prod,

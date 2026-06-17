@@ -26,10 +26,10 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # Pinned to match .tool-versions (Erlang 28 / Elixir 1.19), which stays
+        # Pinned to match .tool-versions (Erlang 28 / Elixir 1.20), which stays
         # authoritative for CI. Nix gives a reproducible local shell that agrees.
         erlang = pkgs.beam.packages.erlang_28;
-        elixir = erlang.elixir_1_19;
+        elixir = erlang.elixir_1_20;
 
         # treefmt config — one formatter per language. See formatters.md.
         treefmtEval = treefmt-nix.lib.evalModule pkgs {
